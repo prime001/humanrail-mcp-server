@@ -16,10 +16,11 @@ import hashlib
 import json
 import os
 import time
-from typing import Any
+from typing import Annotated, Any
 
 import httpx
 from mcp.server.fastmcp import FastMCP
+from pydantic import Field
 
 # ── Config ───────────────────────────────────────────────────────────────────
 
@@ -34,6 +35,8 @@ mcp = FastMCP(
         "verify information, moderate content, or handle anything requiring human expertise. "
         "Workers are paid via Lightning Network. Results are verified before delivery."
     ),
+    host="0.0.0.0",
+    port=8100,
 )
 
 # ── HTTP Client ──────────────────────────────────────────────────────────────
@@ -87,51 +90,20 @@ def _idempotency_key(namespace: str, *parts: str) -> str:
 # ── Tools ────────────────────────────────────────────────────────────────────
 
 
-@mcp.tool()
+@mcp.tool(annotations={"title": "Create Human Task", "readOnlyHint": False, "destructiveHint": False, "idempotentHint": True, "openWorldHint": True})
 def create_task(
-    task_type: str,
-    payload: dict[str, Any],
-    output_schema: dict[str, Any],
-    idempotency_key: str | None = None,
-    risk_tier: str = "medium",
-    sla_seconds: int = 600,
-    payout_currency: str = "USD",
-    payout_max_amount: float = 0.50,
-    callback_url: str | None = None,
-    metadata: dict[str, Any] | None = None,
+    task_type: Annotated[str, Field(description="Category of work, e.g. 'content_moderation', 'refund_eligibility', 'data_verification', 'quality_assessment'")],
+    payload: Annotated[dict[str, Any], Field(description="Context for the human worker — include everything they need to make a decision (order details, content to review, customer history, etc.)")],
+    output_schema: Annotated[dict[str, Any], Field(description="JSON Schema defining what the worker must return, e.g. {\"type\": \"object\", \"required\": [\"eligible\"], \"properties\": {\"eligible\": {\"type\": \"boolean\"}}}")],
+    idempotency_key: Annotated[str | None, Field(description="Prevents duplicate tasks on retry. Auto-generated if not provided.")] = None,
+    risk_tier: Annotated[str, Field(description="Worker pool and verification depth: 'low', 'medium', 'high', or 'critical'. Default: 'medium'.")] = "medium",
+    sla_seconds: Annotated[int, Field(description="Deadline in seconds (60-86400). Default: 600 (10 minutes).")] = 600,
+    payout_currency: Annotated[str, Field(description="Payment currency: 'USD', 'BTC', or 'SATS'. Default: 'USD'.")] = "USD",
+    payout_max_amount: Annotated[float, Field(description="Maximum worker payout amount. Default: 0.50 USD.")] = 0.50,
+    callback_url: Annotated[str | None, Field(description="Optional HTTPS URL to receive webhook events for this task.")] = None,
+    metadata: Annotated[dict[str, Any] | None, Field(description="Optional tracking metadata (not visible to workers).")] = None,
 ) -> dict:
-    """Create a task for human review and judgment.
-
-    Use this when the AI agent encounters something that needs human decision-making:
-    - Content moderation (is this appropriate?)
-    - Refund eligibility (should we approve this refund?)
-    - Data verification (is this information accurate?)
-    - Subjective assessment (rate this quality 1-10)
-    - Edge cases the AI isn't confident about
-
-    The task is routed to a vetted human worker who returns a structured result
-    matching your output_schema. Results are verified before delivery.
-
-    Args:
-        task_type: Category of work (e.g., "content_moderation", "refund_eligibility",
-                   "data_verification", "quality_assessment").
-        payload: Context for the human worker. Include everything they need to make
-                 a decision (order details, content to review, customer history, etc.).
-        output_schema: JSON Schema defining what the worker must return.
-                       Example: {"type": "object", "required": ["eligible"],
-                                 "properties": {"eligible": {"type": "boolean"}}}
-        idempotency_key: Prevents duplicate tasks on retry. Auto-generated if not provided.
-        risk_tier: "low", "medium", "high", or "critical". Higher tiers get more
-                   experienced workers and deeper verification. Default: "medium".
-        sla_seconds: Deadline in seconds (60-86400). Default: 600 (10 minutes).
-        payout_currency: "USD", "BTC", or "SATS". Default: "USD".
-        payout_max_amount: Maximum worker payout. Default: 0.50 USD.
-        callback_url: Optional HTTPS URL to receive webhook events for this task.
-        metadata: Optional tracking metadata (not visible to workers).
-
-    Returns:
-        The created task with id, status, and all fields.
-    """
+    """Create a task for human review and judgment. Use when the AI agent needs a human to make a subjective decision — content moderation, refund eligibility, data verification, quality assessment, or any edge case the AI isn't confident about. Returns a task object with an ID to track progress."""
     if not idempotency_key:
         idempotency_key = _idempotency_key(
             "mcp", task_type, json.dumps(payload, sort_keys=True), str(time.time())
@@ -157,52 +129,21 @@ def create_task(
     return _request("POST", "/tasks", body=body)
 
 
-@mcp.tool()
-def get_task(task_id: str) -> dict:
-    """Get the current status and result of a task.
-
-    Use this to check if a human worker has completed their review.
-    When status is "verified", the "output" field contains the worker's
-    verified response matching your output_schema.
-
-    Task statuses:
-    - posted: Task created, waiting for assignment
-    - assigned: Worker picked up the task
-    - submitted: Worker submitted result, awaiting verification
-    - verified: Result verified — check the "output" field for the answer
-    - failed: Task failed (see failureReason)
-    - cancelled: Task was cancelled
-    - expired: SLA deadline passed without completion
-
-    Args:
-        task_id: The task UUID returned from create_task.
-
-    Returns:
-        Full task object including status, output (if complete), and timestamps.
-    """
+@mcp.tool(annotations={"title": "Get Task Status", "readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": True})
+def get_task(
+    task_id: Annotated[str, Field(description="The task UUID returned from create_task.")],
+) -> dict:
+    """Get the current status and result of a task. When status is 'verified', the 'output' field contains the worker's verified response. Statuses: posted, assigned, submitted, verified, failed, cancelled, expired."""
     return _request("GET", f"/tasks/{task_id}")
 
 
-@mcp.tool()
+@mcp.tool(annotations={"title": "Wait for Task Completion", "readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": True})
 def wait_for_task(
-    task_id: str,
-    poll_interval_seconds: float = 3.0,
-    timeout_seconds: float = 300.0,
+    task_id: Annotated[str, Field(description="The task UUID to wait for.")],
+    poll_interval_seconds: Annotated[float, Field(description="Seconds between status checks. Default: 3.")] = 3.0,
+    timeout_seconds: Annotated[float, Field(description="Maximum time to wait in seconds. Default: 300 (5 minutes).")] = 300.0,
 ) -> dict:
-    """Wait for a task to complete by polling until it reaches a terminal state.
-
-    This is a convenience method that polls get_task repeatedly until the task
-    is verified, failed, cancelled, or expired. Use this when you need the
-    human's answer before proceeding.
-
-    Args:
-        task_id: The task UUID to wait for.
-        poll_interval_seconds: Seconds between status checks. Default: 3.
-        timeout_seconds: Maximum time to wait. Default: 300 (5 minutes).
-
-    Returns:
-        The task in its terminal state with the worker's output.
-    """
+    """Wait for a task to complete by polling until it reaches a terminal state (verified, failed, cancelled, or expired). Use this when you need the human's answer before proceeding."""
     terminal = {"verified", "failed", "cancelled", "expired"}
     deadline = time.monotonic() + timeout_seconds
 
@@ -222,46 +163,23 @@ def wait_for_task(
     }
 
 
-@mcp.tool()
-def cancel_task(task_id: str) -> dict:
-    """Cancel a task that hasn't been completed yet.
-
-    Only works if the task is still in a non-terminal state (posted, assigned,
-    submitted). Cannot cancel tasks that are already verified, failed, or expired.
-
-    Args:
-        task_id: The task UUID to cancel.
-
-    Returns:
-        Cancellation confirmation with the updated status and timestamp.
-    """
+@mcp.tool(annotations={"title": "Cancel Task", "readOnlyHint": False, "destructiveHint": True, "idempotentHint": True, "openWorldHint": True})
+def cancel_task(
+    task_id: Annotated[str, Field(description="The task UUID to cancel.")],
+) -> dict:
+    """Cancel a task that hasn't been completed yet. Only works for non-terminal states (posted, assigned, submitted). Cannot cancel verified, failed, or expired tasks."""
     return _request("POST", f"/tasks/{task_id}/cancel")
 
 
-@mcp.tool()
+@mcp.tool(annotations={"title": "List Tasks", "readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": True})
 def list_tasks(
-    status: str | None = None,
-    task_type: str | None = None,
-    limit: int = 20,
-    created_after: str | None = None,
-    created_before: str | None = None,
+    status: Annotated[str | None, Field(description="Filter by status: 'posted', 'assigned', 'submitted', 'verified', 'failed', 'cancelled', 'expired'.")] = None,
+    task_type: Annotated[str | None, Field(description="Filter by task type, e.g. 'content_moderation'.")] = None,
+    limit: Annotated[int, Field(description="Max results to return (1-100). Default: 20.")] = 20,
+    created_after: Annotated[str | None, Field(description="ISO 8601 timestamp — only tasks created after this time.")] = None,
+    created_before: Annotated[str | None, Field(description="ISO 8601 timestamp — only tasks created before this time.")] = None,
 ) -> dict:
-    """List tasks with optional filters.
-
-    Useful for checking recent task activity, finding completed tasks,
-    or monitoring pending work.
-
-    Args:
-        status: Filter by status ("posted", "assigned", "submitted",
-                "verified", "failed", "cancelled", "expired").
-        task_type: Filter by task type (e.g., "content_moderation").
-        limit: Max results to return (1-100). Default: 20.
-        created_after: ISO 8601 timestamp — only tasks created after this time.
-        created_before: ISO 8601 timestamp — only tasks created before this time.
-
-    Returns:
-        Paginated list of tasks with has_more and next_cursor for pagination.
-    """
+    """List tasks with optional filters. Useful for checking recent activity, finding completed tasks, or monitoring pending work. Returns paginated results."""
     query: dict[str, Any] = {"limit": limit}
     if status:
         query["status"] = status
@@ -275,27 +193,15 @@ def list_tasks(
     return _request("GET", "/tasks", query=query)
 
 
-@mcp.tool()
+@mcp.tool(annotations={"title": "Get Usage Stats", "readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": True})
 def get_usage() -> dict:
-    """Get usage statistics and billing summary for your organization.
-
-    Returns task counts, API call volumes, and average latency metrics.
-    Useful for monitoring your HumanRail usage and costs.
-
-    Returns:
-        Usage stats including tasks_created, tasks_completed, tasks_failed,
-        api_calls_total, and avg_latency_ms.
-    """
+    """Get usage statistics and billing summary for your organization. Returns task counts, API call volumes, and average latency metrics."""
     return _request("GET", "/org/usage")
 
 
-@mcp.tool()
+@mcp.tool(annotations={"title": "Health Check", "readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False})
 def health_check() -> dict:
-    """Check if the HumanRail API is healthy and reachable.
-
-    Returns:
-        Health status of the API.
-    """
+    """Check if the HumanRail API is healthy and reachable. Returns status and HTTP code."""
     url = f"{BASE_URL.rsplit('/v1', 1)[0]}/healthz"
     with httpx.Client(timeout=10.0) as client:
         response = client.get(url)
