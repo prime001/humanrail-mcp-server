@@ -1,0 +1,36 @@
+[project]
+name = "humanrail-mcp-server"
+version = "1.0.0"
+description = "MCP server for HumanRail — route tasks requiring human judgment to vetted workers"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.10"
+authors = [
+    {name = "Erik Anderson", email = "erik@humanrail.dev"},
+]
+keywords = ["mcp", "humanrail", "human-in-the-loop", "ai-agents", "task-routing"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Topic :: Software Development :: Libraries",
+]
+
+dependencies = [
+    "mcp[cli]>=1.0.0",
+    "httpx>=0.27.0",
+]
+
+[project.urls]
+Homepage = "https://humanrail.dev"
+Documentation = "https://docs.humanrail.dev"
+Repository = "https://github.com/prime001/humanrail-mcp-server"
+Issues = "https://github.com/prime001/humanrail-mcp-server/issues"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["."]
