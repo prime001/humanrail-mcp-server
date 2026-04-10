@@ -35,7 +35,7 @@ mcp = FastMCP(
         "verify information, moderate content, or handle anything requiring human expertise. "
         "Workers are paid via Lightning Network. Results are verified before delivery."
     ),
-    host="0.0.0.0",
+    host="127.0.0.1",
     port=8100,
 )
 
